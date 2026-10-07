@@ -1,0 +1,33 @@
+name: 下载抖音视频
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: '抖音分享链接'
+        required: true
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 安装 yt-dlp
+        run: pip install yt-dlp
+
+      - name: 尝试下载
+        id: dl
+        run: |
+          mkdir -p output
+          yt-dlp --no-playlist \
+            -f "best[ext=mp4]/best" \
+            -o "output/video.%(ext)s" \
+            "${{ inputs.video_url }}" 2>&1 | tail -20
+          ls -lh output/
+
+      - name: 上传视频
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-video
+          path: output/
+          retention-days: 7
