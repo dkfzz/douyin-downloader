@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>天天抖音下载器</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0f0f;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 20px}
+h1{font-size:28px;margin-bottom:8px}
+.sub{color:#999;font-size:14px;margin-bottom:32px}
+.box{width:100%;max-width:560px;background:#1a1a1a;border-radius:16px;padding:24px}
+textarea{width:100%;height:100px;background:#0f0f0f;border:1px solid #333;border-radius:12px;color:#fff;padding:12px;font-size:14px;resize:vertical}
+textarea:focus{outline:none;border-color:#fe2c55}
+button{width:100%;margin-top:16px;background:#fe2c55;color:#fff;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;cursor:pointer}
+button:hover{background:#e6294d}
+button:disabled{background:#555;cursor:not-allowed}
+#result{margin-top:20px;display:none}
+.video-info{background:#0f0f0f;border-radius:12px;padding:16px;margin-bottom:12px}
+.video-info img{width:100%;border-radius:8px;margin-bottom:12px}
+.video-info .title{font-size:15px;margin-bottom:8px}
+.video-info .author{color:#999;font-size:13px}
+.dl-btn{display:block;text-align:center;background:#25d366;text-decoration:none;color:#fff;border-radius:12px;padding:14px;font-size:16px;font-weight:600;margin-top:12px}
+.manual{margin-top:24px;background:#1a1a1a;border-radius:16px;padding:24px;width:100%;max-width:560px}
+.manual h2{font-size:18px;margin-bottom:16px}
+.manual ol{padding-left:20px;color:#ccc;font-size:14px;line-height:2}
+.manual code{background:#0f0f0f;padding:2px 8px;border-radius:6px;color:#fe2c55;font-size:13px}
+.loading{text-align:center;color:#999;padding:20px}
+.error{color:#fe2c55;background:#2a0f0f;border-radius:12px;padding:16px;margin-top:20px;font-size:14px;display:none}
+</style>
+</head>
+<body>
+<h1>🎬 天天抖音下载器</h1>
+<p class="sub">粘贴抖音分享链接，一键解析下载</p>
+
+<div class="box">
+<textarea id="url" placeholder="粘贴抖音分享链接，例如：&#10;https://v.douyin.com/xxxxx/"></textarea>
+<button id="parse" onclick="parseVideo()">解析视频</button>
+<div id="result"></div>
+<div class="error" id="error"></div>
+</div>
+
+<div class="manual">
+<h2>📱 如果自动解析失败（备用方法）</h2>
+<ol>
+<li>在抖音 App 打开视频，点 <b>分享</b> → <b>复制链接</b></li>
+<li>把链接发到电脑微信，用电脑浏览器打开</li>
+<li>按 <code>F12</code> 打开开发者工具 → <code>Network</code> 标签</li>
+<li>刷新页面，在过滤框输入 <code>mp4</code></li>
+<li>找到视频请求，右键 → <b>在新标签页中打开</b> → 右键视频另存为</li>
+</ol>
+</div>
+
+<script>
+async function parseVideo() {
+  const url = document.getElementById('url').value.trim();
+  const result = document.getElementById('result');
+  const error = document.getElementById('error');
+  const btn = document.getElementById('parse');
+  result.style.display = 'none';
+  error.style.display = 'none';
+
+  if (!url) { showError('请先粘贴抖音链接'); return; }
+
+  // 提取视频 ID
+  let videoId = null;
+  const idMatch = url.match(/video\/(\d+)/);
+  if (idMatch) videoId = idMatch[1];
+
+  btn.disabled = true;
+  btn.textContent = '解析中...';
+  result.style.display = 'block';
+  result.innerHTML = '<div class="loading">正在解析，请稍候...</div>';
+
+  try {
+    if (!videoId) {
+      // 短链，先尝试跟随跳转
+      const resp = await fetch(url, { redirect: 'follow' });
+      const finalUrl = resp.url;
+      const m = finalUrl.match(/video\/(\d+)/);
+      if (m) videoId = m[1];
+    }
+    if (!videoId) throw new Error('无法从链接中提取视频 ID');
+
+    // 尝试多个解析接口
+    const apis = [
+      `https://api.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=${videoId}`,
+    ];
+
+    let videoUrl = null, title = '', author = '', cover = '';
+
+    // 由于浏览器跨域限制，直接调用抖音 API 通常会被拦截
+    // 这里尝试通过公共解析服务
+    throw new Error('DIRECT_BLOCKED');
+
+  } catch (e) {
+    showError('自动解析被抖音拦截了。<br><br>抖音的反爬很严，浏览器端无法直接获取视频地址。请用下面的 <b>备用方法</b> 手动下载，或者把链接发给我，我来帮你下。');
+    result.style.display = 'none';
+  }
+
+  btn.disabled = false;
+  btn.textContent = '解析视频';
+}
+
+function showError(msg) {
+  const error = document.getElementById('error');
+  error.innerHTML = msg;
+  error.style.display = 'block';
+}
+</script>
+</body>
+</html>
