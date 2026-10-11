@@ -26,6 +26,9 @@ def main():
         r = subprocess.run([
             "yt-dlp",
             "--no-check-certificate",
+            "--impersonate", "chrome",
+            "--extractor-args", "generic:impersonate",
+            "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
             "-t", "mp4",
             "-f", FORMAT,
             "--retries", "5",
