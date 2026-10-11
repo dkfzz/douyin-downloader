@@ -247,6 +247,26 @@ def merge_eps(ep_files, out) -> bool:
     return False
 
 
+def validate_ep(path: str) -> str:
+    """校验分集文件完整性。返回 ok / no_audio / bad。"""
+    if not os.path.exists(path) or os.path.getsize(path) < 10240:
+        return "bad"
+    info = probe_video(path)
+    if not info:
+        return "bad"
+    if not info.get("acodec"):
+        return "no_audio"
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", path],
+                       capture_output=True, text=True, timeout=60)
+    m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", r.stderr)
+    if not m:
+        return "bad"
+    dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    if dur < 5:
+        return "bad"
+    return "ok"
+
+
 def dl_ep(url: str, out: str) -> bool:
     r = subprocess.run(
         ["ffmpeg", "-y", "-hide_banner",
@@ -304,21 +324,28 @@ def main():
     failed = []
     for n in sorted(urls):
         out = os.path.join(title, f"ep{n:02d}.mp4")
-        if os.path.exists(out) and os.path.getsize(out) > 1024:
-            print(f"  ep{n:02d} 已存在，跳过", flush=True); continue
+        if os.path.exists(out) and validate_ep(out) == "ok":
+            print(f"  ep{n:02d} 已存在且完整，跳过", flush=True); continue
+        if os.path.exists(out):
+            os.remove(out)  # 残缺文件删掉重下
         print(f"② 下载 ep{n:02d}/{len(urls)} …", flush=True)
-        if not dl_ep(urls[n], out):
-            print("   失败，重新取地址再试一次…", flush=True)
+        ok = dl_ep(urls[n], out) and validate_ep(out) == "ok"
+        if not ok:
+            print("   校验失败，重新取地址再试一次…", flush=True)
             try:
                 urls = {e["index"]: e["video_url"]
                         for e in api(pid)["data"]["episodeAll"]}
-                ok = dl_ep(urls[n], out)
+                if os.path.exists(out):
+                    os.remove(out)
+                ok = dl_ep(urls[n], out) and validate_ep(out) == "ok"
             except Exception as ex:
                 ok = False
                 print(f"   重试异常: {ex}", flush=True)
             if not ok:
                 failed.append(n)
                 print(f"   ep{n:02d} 失败，先继续下一集", flush=True)
+                if os.path.exists(out):
+                    os.remove(out)
     if failed:
         print(f"有 {len(failed)} 集没下完：{failed}")
         print("网络恢复后重跑本脚本会自动续下，暂不合并")
@@ -326,8 +353,16 @@ def main():
 
     print("③ 合并…", flush=True)
     ep_files = [os.path.join(title, f"ep{n:02d}.mp4") for n in sorted(urls)]
+    # 合并前再验一遍输入
+    for p in ep_files:
+        v = validate_ep(p)
+        if v != "ok":
+            print(f"  {os.path.basename(p)} 校验失败({v})，移出合并列表", flush=True)
+    ep_files = [p for p in ep_files if validate_ep(p) == "ok"]
+    if not ep_files:
+        print("没有可用的分集文件"); return
     merged = f"{title}.mp4"
-    if merge_eps(ep_files, merged):
+    if merge_eps(ep_files, merged) and validate_ep(merged) == "ok":
         mb = os.path.getsize(merged) // 1048576
         print(f"④ 完成：{merged}（{mb}MB），清理分集…", flush=True)
         for p in ep_files:
@@ -335,7 +370,7 @@ def main():
         os.rmdir(title)
         print("搞定，直接看吧")
     else:
-        print("合并失败，分集保留在文件夹里")
+        print("合并失败或成品校验不通过，分集保留在文件夹里")
 
 
 if __name__ == "__main__":
