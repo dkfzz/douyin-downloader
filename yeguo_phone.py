@@ -221,14 +221,18 @@ def merge_eps(ep_files, out) -> bool:
         os.remove(lst)
         return r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0
 
-    print("检测到分集画质不一致，转码统一合并（稍慢，但不会冻屏）…", flush=True)
+    print("检测到分集画质不一致，转码统一合并（较慢，请稍候）…", flush=True)
     for venc, vargs in (("h264_videotoolbox", ["-b:v", "5M"]),
-                        ("libx264", ["-preset", "veryfast", "-crf", "20"])):
+                        ("libx264", ["-preset", "veryfast", "-crf", "20"]),
+                        ("mpeg4", ["-q:v", "3"])):
+        print(f"尝试编码器 {venc}…", flush=True)
         cmd = _transcode_cmd(ep_files, infos, out, venc, vargs)
-        r = subprocess.run(cmd, timeout=7200)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
         if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
             return True
-        print(f"{venc} 不可用，换编码器重试…", flush=True)
+        print(f"{venc} 失败，报错：", flush=True)
+        for line in (r.stderr or "").strip().splitlines()[-6:]:
+            print(f"  {line}", flush=True)
     return False
 
 
