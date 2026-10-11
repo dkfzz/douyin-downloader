@@ -256,13 +256,39 @@ def main():
     pid = int(m.group(1))
 
     print("① 取全集地址…", flush=True)
-    data = api(pid)["data"]
-    title = sanitize(data.get("drama_name") or data.get("video_title") or f"drama_{pid}")
-    eps = data["episodeAll"]
+    resp = api(pid)
+    raw = resp.get("data")
+    if isinstance(raw, list):
+        if not raw:
+            print(f"  接口返回空列表，msg={resp.get('msg')}", flush=True)
+            return
+        print(f"  接口返回列表结构，共 {len(raw)} 项", flush=True)
+        if isinstance(raw[0], dict):
+            print(f"  首项键: {list(raw[0].keys())}", flush=True)
+        eps = raw
+        title = f"drama_{pid}"
+    elif isinstance(raw, dict):
+        title = sanitize(raw.get("drama_name") or raw.get("video_title") or f"drama_{pid}")
+        eps = raw.get("episodeAll") or []
+    else:
+        print(f"  接口返回未知结构: {type(raw).__name__}", flush=True)
+        return
+    if not eps:
+        print("  没取到分集列表", flush=True)
+        return
     print(f"《{title}》共 {len(eps)} 集", flush=True)
 
     os.makedirs(title, exist_ok=True)
-    urls = {e["index"]: e["video_url"] for e in eps}
+    urls = {}
+    for n, e in enumerate(eps, 1):
+        if not isinstance(e, dict):
+            continue
+        url = e.get("video_url")
+        if url:
+            urls[e.get("index", n)] = url
+    if not urls:
+        print("  没解析到下载地址", flush=True)
+        return
 
     failed = []
     for n in sorted(urls):
