@@ -153,12 +153,14 @@ def sanitize(s: str) -> str:
 
 def probe_video(path: str):
     """探测视频流参数。用 ffmpeg -i 解析（a-shell 不一定有 ffprobe）。
-    返回 {'codec':, 'w':, 'h':, 'fps':}，失败返回 None。"""
+    返回 {'codec':, 'pix':, 'w':, 'h':, 'fps':, 'acodec':}，失败返回 None。"""
     r = subprocess.run(["ffmpeg", "-hide_banner", "-i", path],
                        capture_output=True, text=True)
+    vinfo, acodec = None, ""
     for line in r.stderr.splitlines():
-        if "Video:" in line:
+        if "Video:" in line and vinfo is None:
             c = re.search(r"Video:\s*(\w+)", line)
+            p = re.search(r"Video:\s*\w+[^\n]*?,\s*([a-z0-9]+)\(", line)
             m = re.search(r"\b(\d{2,})x(\d{2,})\b", line)
             f = re.search(r"(\d+(?:\.\d+)?)\s*fps", line)
             if m:
@@ -167,10 +169,17 @@ def probe_video(path: str):
                     fps = str(float(fps)) if fps else ""
                 except ValueError:
                     pass
-                return {"codec": c.group(1) if c else "",
-                        "w": int(m.group(1)), "h": int(m.group(2)),
-                        "fps": fps}
-    return None
+                vinfo = {"codec": c.group(1) if c else "",
+                         "pix": p.group(1) if p else "",
+                         "w": int(m.group(1)), "h": int(m.group(2)),
+                         "fps": fps}
+        elif "Audio:" in line and not acodec:
+            a = re.search(r"Audio:\s*(\w+)", line)
+            if a:
+                acodec = a.group(1)
+    if vinfo:
+        vinfo["acodec"] = acodec
+    return vinfo
 
 
 def _transcode_cmd(ep_files, infos, out, venc, vargs):
@@ -191,6 +200,7 @@ def _transcode_cmd(ep_files, infos, out, venc, vargs):
         if not info or info["fps"] != fps:
             chain.append(f"fps={fps}")
         chain.append("setsar=1")
+        chain.append("format=yuv420p")
         fc.append(f"[{idx}:v]{','.join(chain)}[v{idx}]")
         cin.append(f"[v{idx}][{idx}:a]")
     fc.append("".join(cin) + f"concat=n={len(ep_files)}:v=1:a=1[v][a]")
@@ -204,7 +214,7 @@ def merge_eps(ep_files, out) -> bool:
     """智能合并：参数一致则无损快拼，否则统一转码（解决混分辨率导致的冻屏）。"""
     infos = [probe_video(f) for f in ep_files]
     if all(infos):
-        keys = [(i["codec"], i["w"], i["h"], i["fps"]) for i in infos]
+        keys = [(i["codec"], i["pix"], i["w"], i["h"], i["fps"], i["acodec"]) for i in infos]
         uniform = len(set(keys)) == 1
     else:
         uniform = False
@@ -215,7 +225,8 @@ def merge_eps(ep_files, out) -> bool:
         with open(lst, "w") as f:
             for p in ep_files:
                 f.write(f"file '{os.path.abspath(p)}'\n")
-        r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-f", "concat",
+        r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-fflags", "+genpts",
+                            "-f", "concat",
                             "-safe", "0", "-i", lst, "-c", "copy", out],
                            timeout=1800)
         os.remove(lst)
