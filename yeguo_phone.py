@@ -11,7 +11,7 @@
 流程：取全集 m3u8 地址 -> ffmpeg 逐集下载 -> 合并成一个 MP4 -> 自动删除分集
 （3282 = 《母子同欢》）
 """
-import sys, os, json, base64, hashlib, subprocess, re
+import sys, os, json, base64, hashlib, subprocess, re, time
 import urllib.request, urllib.parse
 
 API = "https://www.yeguodj.com/api.php/api/playlet/play"
@@ -127,7 +127,7 @@ def sign(params: dict) -> str:
     return hashlib.md5(hashlib.sha256(s.encode()).hexdigest().encode()).hexdigest()
 
 
-def api(playlet_id: int, episode_id: int = 0) -> dict:
+def api(playlet_id: int, episode_id: int = 0, retries: int = 4) -> dict:
     params = {"bundleId": "com.pwa.mater", "version": "1.3.2", "oauth_type": "web",
               "language": "zh", "via": "pwa",
               "oauth_id": OAUTH_ID, "trace_id": OAUTH_ID,
@@ -139,11 +139,18 @@ def api(playlet_id: int, episode_id: int = 0) -> dict:
         headers={"User-Agent": UA, "Referer": SITE,
                  "Origin": "https://again.agvibdto.cc",
                  "Content-Type": "application/x-www-form-urlencoded"})
-    with urllib.request.urlopen(req, timeout=40) as r:
-        j = json.load(r)
-    raw = base64.b64decode(j["data"].replace(" ", "+"))
-    pt = _aes_cbc_decrypt(KEY, IV, raw)
-    return json.loads(pt[:-pt[-1]].decode("utf-8"))
+    last = None
+    for i in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                j = json.load(r)
+            raw = base64.b64decode(j["data"].replace(" ", "+"))
+            pt = _aes_cbc_decrypt(KEY, IV, raw)
+            return json.loads(pt[:-pt[-1]].decode("utf-8"))
+        except Exception as ex:
+            last = ex
+            time.sleep(2 * (i + 1))
+    raise last
 
 
 def sanitize(s: str) -> str:
@@ -175,8 +182,14 @@ def probe_video(path: str):
                          "fps": fps}
         elif "Audio:" in line and not acodec:
             a = re.search(r"Audio:\s*(\w+)", line)
+            sr = re.search(r"(\d+)\s*Hz", line)
+            ch = re.search(r"(stereo|mono|5\.1)", line)
             if a:
                 acodec = a.group(1)
+                if sr:
+                    acodec += f"_{sr.group(1)}"
+                if ch:
+                    acodec += f"_{ch.group(1)}"
     if vinfo:
         vinfo["acodec"] = acodec
     return vinfo
@@ -189,6 +202,13 @@ def _transcode_cmd(ep_files, infos, out, venc, vargs):
     H = max([i["h"] for i in good]) if good else 1280
     fps_vals = [i["fps"] for i in good if i["fps"]]
     fps = max(set(fps_vals), key=fps_vals.count) if fps_vals else "30.0"
+    # 音频统一到最常见的采样率
+    sr_vals = []
+    for i in good:
+        m = re.search(r"_(\d+)", i.get("acodec", ""))
+        if m:
+            sr_vals.append(m.group(1))
+    sr = max(set(sr_vals), key=sr_vals.count) if sr_vals else "44100"
     cmd = ["ffmpeg", "-y", "-hide_banner"]
     fc, cin = [], []
     for idx, f in enumerate(ep_files):
@@ -202,7 +222,9 @@ def _transcode_cmd(ep_files, infos, out, venc, vargs):
         chain.append("setsar=1")
         chain.append("format=yuv420p")
         fc.append(f"[{idx}:v]{','.join(chain)}[v{idx}]")
-        cin.append(f"[v{idx}][{idx}:a]")
+        # 音频统一重采样
+        fc.append(f"[{idx}:a]aresample={sr},aformat=channel_layouts=stereo[a{idx}]")
+        cin.append(f"[v{idx}][a{idx}]")
     fc.append("".join(cin) + f"concat=n={len(ep_files)}:v=1:a=1[v][a]")
     cmd += ["-filter_complex", ";".join(fc),
             "-map", "[v]", "-map", "[a]",
