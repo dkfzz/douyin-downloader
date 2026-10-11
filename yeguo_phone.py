@@ -151,6 +151,87 @@ def sanitize(s: str) -> str:
     return s or "drama"
 
 
+def probe_video(path: str):
+    """探测视频流参数。用 ffmpeg -i 解析（a-shell 不一定有 ffprobe）。
+    返回 {'codec':, 'w':, 'h':, 'fps':}，失败返回 None。"""
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", path],
+                       capture_output=True, text=True)
+    for line in r.stderr.splitlines():
+        if "Video:" in line:
+            c = re.search(r"Video:\s*(\w+)", line)
+            m = re.search(r"\b(\d{2,})x(\d{2,})\b", line)
+            f = re.search(r"(\d+(?:\.\d+)?)\s*fps", line)
+            if m:
+                fps = f.group(1) if f else ""
+                try:
+                    fps = str(float(fps)) if fps else ""
+                except ValueError:
+                    pass
+                return {"codec": c.group(1) if c else "",
+                        "w": int(m.group(1)), "h": int(m.group(2)),
+                        "fps": fps}
+    return None
+
+
+def _transcode_cmd(ep_files, infos, out, venc, vargs):
+    """转码合并命令：统一分辨率/fps。venc 如 h264_videotoolbox（手机硬件编码）。"""
+    good = [i for i in infos if i]
+    W = max([i["w"] for i in good]) if good else 720
+    H = max([i["h"] for i in good]) if good else 1280
+    fps_vals = [i["fps"] for i in good if i["fps"]]
+    fps = max(set(fps_vals), key=fps_vals.count) if fps_vals else "30.0"
+    cmd = ["ffmpeg", "-y", "-hide_banner"]
+    fc, cin = [], []
+    for idx, f in enumerate(ep_files):
+        cmd += ["-i", f]
+        chain = []
+        info = infos[idx]
+        if not info or info["w"] != W or info["h"] != H:
+            chain.append(f"scale={W}:{H}:flags=lanczos")
+        if not info or info["fps"] != fps:
+            chain.append(f"fps={fps}")
+        chain.append("setsar=1")
+        fc.append(f"[{idx}:v]{','.join(chain)}[v{idx}]")
+        cin.append(f"[v{idx}][{idx}:a]")
+    fc.append("".join(cin) + f"concat=n={len(ep_files)}:v=1:a=1[v][a]")
+    cmd += ["-filter_complex", ";".join(fc),
+            "-map", "[v]", "-map", "[a]",
+            "-c:v", venc] + vargs + ["-c:a", "aac", "-b:a", "128k", out]
+    return cmd
+
+
+def merge_eps(ep_files, out) -> bool:
+    """智能合并：参数一致则无损快拼，否则统一转码（解决混分辨率导致的冻屏）。"""
+    infos = [probe_video(f) for f in ep_files]
+    if all(infos):
+        keys = [(i["codec"], i["w"], i["h"], i["fps"]) for i in infos]
+        uniform = len(set(keys)) == 1
+    else:
+        uniform = False
+
+    if uniform:
+        print("分集参数一致，快速无损合并…", flush=True)
+        lst = out + ".list.txt"
+        with open(lst, "w") as f:
+            for p in ep_files:
+                f.write(f"file '{os.path.abspath(p)}'\n")
+        r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-f", "concat",
+                            "-safe", "0", "-i", lst, "-c", "copy", out],
+                           timeout=1800)
+        os.remove(lst)
+        return r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0
+
+    print("检测到分集画质不一致，转码统一合并（稍慢，但不会冻屏）…", flush=True)
+    for venc, vargs in (("h264_videotoolbox", ["-b:v", "5M"]),
+                        ("libx264", ["-preset", "veryfast", "-crf", "20"])):
+        cmd = _transcode_cmd(ep_files, infos, out, venc, vargs)
+        r = subprocess.run(cmd, timeout=7200)
+        if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+            return True
+        print(f"{venc} 不可用，换编码器重试…", flush=True)
+    return False
+
+
 def dl_ep(url: str, out: str) -> bool:
     r = subprocess.run(
         ["ffmpeg", "-y", "-hide_banner",
@@ -203,20 +284,13 @@ def main():
         return
 
     print("③ 合并…", flush=True)
-    lst = os.path.join(title, "list.txt")
-    with open(lst, "w") as f:
-        for n in sorted(urls):
-            p = os.path.abspath(os.path.join(title, f"ep{n:02d}.mp4"))
-            f.write(f"file '{p}'\n")
+    ep_files = [os.path.join(title, f"ep{n:02d}.mp4") for n in sorted(urls)]
     merged = f"{title}.mp4"
-    r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-f", "concat", "-safe", "0",
-                        "-i", lst, "-c", "copy", merged], timeout=1800)
-    if r.returncode == 0 and os.path.exists(merged) and os.path.getsize(merged) > 0:
+    if merge_eps(ep_files, merged):
         mb = os.path.getsize(merged) // 1048576
         print(f"④ 完成：{merged}（{mb}MB），清理分集…", flush=True)
-        for n in sorted(urls):
-            os.remove(os.path.join(title, f"ep{n:02d}.mp4"))
-        os.remove(lst)
+        for p in ep_files:
+            os.remove(p)
         os.rmdir(title)
         print("搞定，直接看吧")
     else:
