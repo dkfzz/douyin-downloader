@@ -1,1 +1,34 @@
+name: 竖转横
 
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: '竖屏视频的直链 URL'
+        required: true
+      output_file:
+        description: '输出文件名'
+        required: true
+        default: 'output_h.mp4'
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 安装 ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: 下载视频
+        run: |
+          curl -L -o input.mp4 "${{ github.event.inputs.video_url }}"
+          ls -lh input.mp4
+
+      - name: 竖转横（模糊背景）
+        run: |
+          ffmpeg -y -i input.mp4 -vf "split[a][b];[a]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,gblur=sigma=50[bg];[b]scale=-2:720[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2" -c:a copy "${{ github.event.inputs.output_file }}"
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: converted-video
+          path: ${{ github.event.inputs.output_file }}
