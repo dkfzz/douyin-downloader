@@ -1,0 +1,32 @@
+name: 竖转横
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_file:
+        description: '仓库里的竖屏视频文件名（比如 input.mp4）'
+        required: true
+        default: 'input.mp4'
+      output_file:
+        description: '输出文件名'
+        required: true
+        default: 'output_h.mp4'
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: 竖转横（模糊背景）
+        run: |
+          ffmpeg -y -i "${{ github.event.inputs.input_file }}" -vf "split[a][b];[a]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,gblur=sigma=50[bg];[b]scale=-2:720[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2" -c:a copy "${{ github.event.inputs.output_file }}"
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: converted-video
+          path: ${{ github.event.inputs.output_file }}
